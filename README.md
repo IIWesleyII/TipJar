@@ -1,28 +1,46 @@
 # TipJar
 
 A learning project for sending and withdrawing ERC-20 tips on-chain.
-This milestone implements **Phase 1: basic Solidity** only.
+**Phases 1–3 are implemented and tested**, and the completed contract is
+deployed on Base Sepolia. Phase 4 adds a React interface for wallet connection,
+USDC approval, tipping, and live statistics.
 
 ## What is implemented
 
 - A local mock USDC token with 6 decimals and unrestricted minting.
 - A Tip Jar configured with a token address at deployment.
-- `tip(uint256 amount)`, lifetime `totalTips`, and owner-only `withdraw()`.
-- Tip and withdrawal events, validation, and Foundry unit tests.
+- `tip(uint256 amount, string calldata message)` and owner-only `withdraw()`.
+- Lifetime `totalTips` and optional messages recorded in tip events.
+- A successful-tip count and lifetime contribution totals for each address.
+- The largest single successful tip and the address that sent it.
+- An owner-controlled withdrawal destination, initially the owner.
+- Custom errors and events for tips, withdrawals, and destination changes.
+- Foundry unit tests, bounded fuzz tests, and token failure coverage.
 
-The deployer is the fixed owner and receives withdrawals. Contributor tracking,
-tip messages, configurable withdrawal destinations, custom Tip Jar errors,
-expanded fuzz testing, and the frontend belong to later phases.
+The deployer remains the fixed owner, even when the withdrawal destination
+changes. The React interface supports Phase 4's tipping flow. Phase 5's event
+history and Phase 6's frontend owner controls remain separate future work.
 
 ## Files and tools
 
 ```text
 contracts/
-  foundry.toml             Compiler and import configuration
-  src/TipJar.sol           Tip and withdrawal logic
-  test/TipJar.t.sol        Core success and failure tests
-  test/mocks/MockUSDC.sol  Token for local tests and Anvil
-  lib/                    Installed dependencies (ignored)
+  foundry.toml           Compiler, imports, and fuzz configuration
+  src/TipJar.sol         Tip statistics and owner controls
+  test/TipJar.t.sol      Unit tests and token failure cases
+  test/TipJarFuzz.t.sol  Tests with generated inputs
+  test/mocks/
+    MockUSDC.sol              Token for local tests and Anvil
+    MockNonReturningUSDC.sol  Token returning no transfer data
+  lib/                  Installed dependencies (ignored)
+  deployments/          Public Base Sepolia addresses and test receipts
+frontend/
+  src/App.tsx           Statistics and page layout
+  src/components/       Wallet connection and tipping form
+  src/hooks/            Contract reads and transaction lifecycle
+  src/abi/tipJar.ts      Generated contract ABI
+  src/deployment.json   Public deployment configuration
+  tests/                Browser tests using a simulated wallet and RPC
 ```
 
 The mock stays under `test/mocks/` so local tests can create token balances
@@ -34,6 +52,22 @@ and forge-std 1.9.7. Dependency versions are deliberately pinned for this
 learning milestone; they are not claims about the latest releases.
 
 ## Setup and tests
+
+For the React interface, see [frontend setup](frontend/README.md). With
+Node.js 22.12 or newer installed, start from the repository root:
+
+```bash
+bash run-frontend.sh
+```
+
+The script also finds this workspace's local WSL Node runtime and installs
+frontend dependencies when missing. Press Ctrl+C to stop the server.
+
+The app defaults to the deployed Base Sepolia contract. Connect the funded
+tipper wallet in your browser; approve USDC first, then send a separate tip.
+Browser signing does not use the private keys in `contracts/.env`.
+
+### Solidity
 
 Use Bash (WSL or Git Bash on Windows). Install Foundry using the
 [official instructions](https://getfoundry.sh/getting-started/installation).
@@ -65,6 +99,40 @@ export PATH="$PWD/.tools:$PATH"
 The tests cover configuration, 6-decimal units, approval and transfer behavior,
 multiple tips and users, emitted events, owner authorization, empty withdrawals,
 failed transfers and rollback, repeated withdrawals, and direct token transfers.
+They also check tip counts, separate contribution totals for multiple users,
+and preservation of existing statistics when a subsequent tip fails.
+Largest-tip tests cover the first record, larger and smaller tips, ties,
+repeated contributions, failed record attempts, and records after withdrawals.
+Message tests check empty text, nonempty text, Unicode, newlines, and exact
+event contents. Failure tests also exercise invalid tips with messages.
+
+Phase 3 adds authorization and validation for withdrawal destinations,
+minimum-unit and full-balance tips, failed withdrawals, and SafeERC20 behavior
+when tokens return false, revert, or transfer successfully without return data.
+The latter mock really moves tokens so its test verifies balances end to end.
+
+The suite has **36 unit tests and 6 fuzz tests**, all passing. Each fuzz test
+runs 256 generated cases by default (1,536 fuzz cases per suite run). Tests
+bound amounts to available balances and exercise multiple contributors,
+withdrawals, recipient changes, insufficient allowances, messages, and direct
+token transfers. These use a local EVM and never sign testnet transactions.
+
+From `contracts/`, explore tests and coverage with:
+
+```bash
+# Unit tests only.
+forge test --match-contract '^TipJarTest$' -vv
+# Generated inputs, with the default 256 cases per fuzz test.
+forge test --match-contract TipJarFuzzTest -vv
+# Trace a changed withdrawal destination and the resulting transfer.
+forge test --match-test test_WithdrawTransfersToConfiguredRecipient -vvvv
+# Measure execution coverage of the contract.
+forge coverage --report summary
+```
+
+The measured `TipJar.sol` coverage is 100% of lines, statements, branches,
+and functions. Coverage shows which code was exercised, not proof that every
+possible behavior is safe; the trusted-token assumptions below still apply.
 
 ## Testnet configuration
 
@@ -83,6 +151,23 @@ with Circle's official test USDC address:
 Fill in `RPC_URL` with a Base Sepolia endpoint, plus your `OWNER_ADDRESS`
 and `TIPPER_ADDRESS`. Record your deployed jar in `TIP_JAR_ADDRESS`. If changing
 networks, update both the RPC endpoint and token address to match.
+
+The current deployment is
+[`0x045ec89C111f0f8fdCA868d736C7DCB8A92201DA`](https://sepolia.basescan.org/address/0x045ec89C111f0f8fdCA868d736C7DCB8A92201DA).
+The owner deployed it, the tipper approved and tipped 0.1 USDC with a message,
+and the owner changed the destination and withdrew the tip back to the tipper.
+The destination was then restored to the owner. The jar is empty, with lifetime
+tips of 0.1 USDC and one successful tip at the end of this check.
+See [the public deployment report](contracts/deployments/README.md) for receipts.
+
+The old Phase 1 jar is retained only for reference in the deployment record.
+These contracts are not upgradeable: future contract changes require another
+deployment and new approvals. Never assume an old jar gained the new code.
+
+The current function signature is `tip(uint256,string)`, and the tip event is
+`TipReceived(address,uint256,string)`. The old Phase 1 jar uses
+`tip(uint256)` and `TipReceived(address,uint256)`. Use the matching signature
+for each deployment; this version does not include the old one-argument call.
 
 The actual deployment signer becomes the owner; setting `OWNER_ADDRESS` alone
 does not configure ownership or authorize transactions. Use an encrypted
@@ -108,16 +193,16 @@ functions such as `owner()`, `usdc()`, and `totalTips()`.
 
 **ERC-20 approval.** Tokens live in the token contract's balance mapping.
 Calling `approve(jar, amount)` gives the jar a spending allowance; it does not
-move tokens. The user then calls `jar.tip(amount)`. Inside the jar,
+move tokens. The user then calls `jar.tip(amount, message)`. Inside the jar,
 `msg.sender` is the tipper; when the jar calls the token's `transferFrom`, the
 token sees the jar as the spender and checks its allowance from that tipper.
 
 ```text
 Tipper -- approve(jar, amount) --> USDC: grants spending permission
-Tipper -- tip(amount) --------> TipJar
+Tipper -- tip(amount, message) -> TipJar
                                 |-- transferFrom(tipper, jar, amount) --> USDC
                                 |-- emits TipReceived
-Owner  -- withdraw() ---------> TipJar -- transfer(owner, balance) ------> USDC
+Owner  -- withdraw() ---------> TipJar -- transfer(recipient, balance) --> USDC
 ```
 
 **Decimals.** Solidity uses integer token amounts. With 6 decimals, `1 USDC`
@@ -132,13 +217,34 @@ that interface. Those helpers handle tokens returning `false` or no return
 value; they do not certify that an arbitrary token is trustworthy. See the
 [SafeERC20 reference](https://docs.openzeppelin.com/contracts/5.x/api/token/erc20#SafeERC20).
 
-**Validation and atomicity.** `require` rejects bad inputs or unauthorized
-calls. Tipping checks the amount, updates accounting, then calls the token:
+**Validation and atomicity.** `if (...) revert ErrorName()` rejects bad inputs
+or unauthorized calls. Tipping checks the amount, updates accounting, then calls the token:
 checks-effects-interactions. A failed token transfer reverts the whole
 transaction, including the `totalTips` update and any token state changes.
 The tests exercise both insufficient allowance and insufficient balance.
-Short revert strings keep this phase simple; the mock's inherited OpenZeppelin
-implementation already uses custom errors internally.
+Custom errors identify failures by a compact selector (the first four bytes of
+the error signature's hash). Tests use `vm.expectRevert(TipJar.InvalidAmount.selector)`
+to check the exact error. OpenZeppelin token errors propagate through SafeERC20.
+
+| Error | When it occurs |
+| --- | --- |
+| `InvalidAmount()` | The tip amount is zero |
+| `Unauthorized()` | A caller other than the owner tries an owner function |
+| `InvalidAddress()` | Token is zero or has no code; destination is zero or the jar |
+| `NothingToWithdraw()` | The jar has no USDC to withdraw |
+
+**Withdrawal destination and modifiers.** `withdrawalAddress` starts as the
+deployer's address. The owner can call `setWithdrawalAddress(newAddress)` to
+change it, including back to the owner. Zero and the jar itself are rejected
+so a withdrawal does not send to an invalid destination or back into the jar.
+The change emits `WithdrawalAddressChanged(previousAddress, newAddress)`.
+Selecting the existing destination is allowed and emits the event too.
+
+Both administrative functions use the `onlyOwner` modifier. It checks the
+caller before the `_` placeholder runs the function body. The recipient does
+not gain permission to withdraw or change settings. `withdraw()` transfers the
+entire current USDC balance to that recipient and logs the recipient and amount.
+A failed token transfer leaves funds and lifetime statistics unchanged.
 
 **Accounting versus balance.** `totalTips` is lifetime successful `tip()` volume.
 It never resets when funds are withdrawn. `usdc.balanceOf(address(jar))` is the
@@ -149,9 +255,45 @@ without calling `tip()`, so they do not increase `totalTips` or emit its event.
 addresses let future clients filter logs by tipper or recipient. Logs avoid
 storing an ever-growing history array in contract storage.
 
+**Optional messages and calldata.** Pass a string to `tip(amount, message)`;
+use `tip(amount, "")` when no message is wanted. Solidity still requires both
+arguments. `string calldata message` lets the function read the text from its
+input data without making a separate mutable copy in memory. The text is
+public transaction data and appears in the `TipReceived` event. It is not
+saved in a contract storage variable, so there is no message getter; clients
+retrieve messages from event logs. Longer messages cost more gas, and this
+milestone does not impose an application-specific length limit.
+
+**Tip counts and mappings.** `tipCount` counts successful `tip()` calls, not
+unique contributors. `mapping(address => uint256) public tippedBy` looks up
+each wallet's lifetime contribution in USDC base units. An address that has
+never tipped returns zero. For example, two tips from Alice of 0.1 and 0.2 USDC
+produce `tipCount == 2` and `tippedBy(alice) == 300000` in a fresh jar.
+
+Inside `tip()`, `tippedBy[msg.sender] += amount` updates only the caller's
+entry. All statistics update before the token transfer, and all revert
+if that transfer fails. Withdrawals preserve the statistics; direct token
+transfers into the jar do not change them. A mapping supports lookup by address
+but does not provide a list of its keys.
+
+**Largest single tip.** `largestTip` starts at zero, and `largestTipper` starts
+at `address(0)` because nobody has tipped yet. Each successful tip checks
+`if (amount > largestTip)` and updates both values when it sets a new record.
+The strict `>` comparison means a tie keeps the first record holder. This
+tracks one tip, not cumulative contributions: Alice tipping 15 USDC twice
+does not beat Bob's single 20 USDC tip. Failed transfers undo record updates,
+direct transfers do not count, and withdrawals preserve the record.
+
 **Test callers.** Foundry's `vm.prank` changes the sender for the next call;
 `vm.startPrank` applies it until `vm.stopPrank`. These simulate different users.
 `vm.expectRevert` and `vm.expectEmit` check failures and event contents.
+
+**Fuzz tests.** A test with input parameters lets Foundry generate many cases.
+`bound(amount, 1, STARTING_BALANCE)` keeps tip amounts meaningful for the funded
+wallet. `vm.assume` skips inputs that do not belong in a scenario, such as the
+owner in a test for unauthorized callers. The message fuzz test limits text to
+256 bytes to keep cases small; the contract itself has no such limit. Every
+generated case starts with fresh test state, so previous cases cannot affect it.
 
 ## Optional local walkthrough
 
@@ -187,7 +329,7 @@ cast send "$USDC_ADDRESS" 'mint(address,uint256)' "$TIPPER" 100000000 \
 # Approve exactly 10 USDC, then tip in a separate transaction.
 cast send "$USDC_ADDRESS" 'approve(address,uint256)' "$JAR_ADDRESS" 10000000 \
   --rpc-url "$RPC_URL" --unlocked --from "$TIPPER"
-cast send "$JAR_ADDRESS" 'tip(uint256)' 10000000 \
+cast send "$JAR_ADDRESS" 'tip(uint256,string)' 10000000 "Thanks!" \
   --rpc-url "$RPC_URL" --unlocked --from "$TIPPER"
 
 cast call "$JAR_ADDRESS" 'totalTips()(uint256)' --rpc-url "$RPC_URL"
@@ -198,9 +340,21 @@ cast call "$USDC_ADDRESS" 'balanceOf(address)(uint256)' "$JAR_ADDRESS" \
 ```
 
 Replace the angle-bracket address placeholders before running those lines.
+Use `""` in place of `"Thanks!"` to tip without a message.
 After withdrawal, the jar balance is zero and `totalTips` remains `10000000`.
 Local addresses depend on deployments and chain resets. Keep your testnet jar
 address in `contracts/.env` as `TIP_JAR_ADDRESS`.
+
+To practice changing the withdrawal destination on this local deployment:
+
+```bash
+cast send "$JAR_ADDRESS" 'setWithdrawalAddress(address)' "$TIPPER" \
+  --rpc-url "$RPC_URL" --unlocked --from "$OWNER"
+cast call "$JAR_ADDRESS" 'withdrawalAddress()(address)' --rpc-url "$RPC_URL"
+```
+
+Future withdrawals now send USDC to the tipper, but only the owner can trigger
+them. Repeat the setter with `"$OWNER"` to restore the original destination.
 
 ## Scope and assumptions
 

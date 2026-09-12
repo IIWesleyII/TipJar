@@ -1,0 +1,2 @@
+# Bash scripts need Unix line endings, including in Windows checkouts.
+*.sh text eol=lf

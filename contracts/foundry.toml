@@ -10,5 +10,8 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
+[profile.default.fuzz]
+runs = 256
+
 [fmt]
 line_length = 80

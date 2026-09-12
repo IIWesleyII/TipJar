@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+test-results/
+playwright-report/
+.tools/
+
+# Keep application helpers despite the root Python template's lib/ rule.
+!src/lib/
